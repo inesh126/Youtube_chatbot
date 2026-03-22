@@ -6,3 +6,4 @@ groq
 langchain
 langchain-text-splitters
 python-dotenv
+reportlab

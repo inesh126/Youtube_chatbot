@@ -1,4 +1,8 @@
 import streamlit as st
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
 
 from pipeline import process_video, ask_question
 from transcript.extractor import extract_video_id
@@ -79,6 +83,110 @@ def process_current_video():
 def clear_chat_memory():
     st.session_state.chat_history = []
     st.toast("Session memory cleared.")
+
+
+def build_conversation_lines():
+    lines = [
+        "YouTube Chatbot Conversation Export",
+        f"Video ID: {st.session_state.video_id or 'Not processed'}",
+        f"Messages: {len(st.session_state.chat_history)}",
+        "",
+    ]
+
+    for message in st.session_state.chat_history:
+        role = message["role"].capitalize()
+        content = message["content"].strip()
+        lines.append(f"{role}:")
+        lines.append(content)
+        lines.append("")
+
+    return lines
+
+
+def create_conversation_txt():
+    return "\n".join(build_conversation_lines()).encode("utf-8")
+
+
+def wrap_pdf_text(text, font_name, font_size, max_width):
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines = []
+    current_line = words[0]
+
+    for word in words[1:]:
+        candidate = f"{current_line} {word}"
+        if stringWidth(candidate, font_name, font_size) <= max_width:
+            current_line = candidate
+        else:
+            lines.append(current_line)
+            current_line = word
+
+    lines.append(current_line)
+    return lines
+
+
+def create_conversation_pdf():
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    left_margin = 50
+    top_margin = 50
+    line_height = 16
+    max_width = width - (left_margin * 2)
+    y_position = height - top_margin
+
+    def new_page():
+        nonlocal y_position
+        pdf.showPage()
+        y_position = height - top_margin
+
+    for raw_line in build_conversation_lines():
+        font_name = "Helvetica-Bold" if raw_line.endswith(":") or raw_line == "YouTube Chatbot Conversation Export" else "Helvetica"
+        font_size = 14 if raw_line == "YouTube Chatbot Conversation Export" else 11
+        wrapped_lines = wrap_pdf_text(raw_line, font_name, font_size, max_width)
+
+        for line in wrapped_lines:
+            if y_position <= top_margin:
+                new_page()
+            pdf.setFont(font_name, font_size)
+            pdf.drawString(left_margin, y_position, line)
+            y_position -= line_height
+
+        if not raw_line:
+            y_position -= 4
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def render_export_actions():
+    has_messages = bool(st.session_state.chat_history)
+    txt_data = create_conversation_txt() if has_messages else b""
+    pdf_data = create_conversation_pdf() if has_messages else b""
+
+    st.markdown("---")
+    st.markdown("### Export Conversation")
+    st.download_button(
+        "Download TXT",
+        data=txt_data,
+        file_name=f"conversation-{st.session_state.video_id or 'session'}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not has_messages,
+    )
+    st.download_button(
+        "Download PDF",
+        data=pdf_data,
+        file_name=f"conversation-{st.session_state.video_id or 'session'}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        disabled=not has_messages,
+    )
+    if not has_messages:
+        st.caption("Start a conversation to enable downloads.")
 
 
 def render_styles():
@@ -209,7 +317,8 @@ def render_sidebar():
             st.session_state.chat_input_prefill = selected_prompt
             st.rerun()
 
-        st.markdown("---")
+        render_export_actions()
+
         st.caption("Session memory lives only in the current Streamlit session.")
 
 
